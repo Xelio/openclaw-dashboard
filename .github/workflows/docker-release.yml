@@ -1,17 +1,16 @@
 # =============================================================================
 # Docker Release — Build and publish Docker images on new upstream releases
 #
-# Checks mudrii/openclaw-dashboard for new releases, builds Docker images
-# for both Go (default) and Python targets, pushes to GHCR, and cleans up
-# images older than 3 months.
+# Checks mudrii/openclaw-dashboard for new releases, builds a Go Docker
+# image, pushes to GHCR, and cleans up images older than 3 months.
 # =============================================================================
 
 name: Docker Release
 
 on:
   schedule:
-    # Check for new upstream releases every 6 hours
-    - cron: "0 */6 * * *"
+    # Check for new upstream releases daily at midnight UTC
+    - cron: "0 0 * * *"
   workflow_dispatch:
 
 permissions:
@@ -70,18 +69,10 @@ jobs:
           fi
 
   build-and-push:
-    name: Build and push Docker images
+    name: Build and push Docker image
     needs: check-upstream-release
     if: needs.check-upstream-release.outputs.new_release == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [go, python]
-        include:
-          - target: go
-            suffix: ""
-          - target: python
-            suffix: "-python"
     steps:
       - name: Checkout our repo (for Dockerfile)
         uses: actions/checkout@v4
@@ -114,15 +105,15 @@ jobs:
         with:
           images: ghcr.io/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ needs.check-upstream-release.outputs.release_tag }}${{ matrix.suffix }}
-            type=raw,value=${{ needs.check-upstream-release.outputs.version }}${{ matrix.suffix }}
-            type=raw,value=latest${{ matrix.suffix }}
+            type=raw,value=${{ needs.check-upstream-release.outputs.release_tag }}
+            type=raw,value=${{ needs.check-upstream-release.outputs.version }}
+            type=raw,value=latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: upstream
-          target: ${{ matrix.target }}
+          target: go
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
