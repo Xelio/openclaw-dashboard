@@ -15,7 +15,7 @@
 FROM golang:1.26-alpine AS go-builder
 
 WORKDIR /build
-COPY go.mod main.go server.go chat.go config.go version.go index.html ./
+COPY go.mod *.go index.html ./
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o openclaw-dashboard .
 
 # --- Stage 2: Go runtime (default) ---
