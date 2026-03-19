@@ -51,18 +51,21 @@ jobs:
           # Strip leading 'v' for the version number
           VERSION="${TAG#v}"
 
-          # Check if this tag already exists as a package version in GHCR
-          EXISTING=$(curl -sfL \
+          # Check if both Go and Python tags already exist in GHCR
+          ALL_TAGS=$(curl -sfL \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             "https://api.github.com/users/xelio/packages/container/openclaw-dashboard/versions" 2>/dev/null \
-            | jq -r --arg tag "$TAG" '.[] | select(.metadata.container.tags[] == $tag) | .id' 2>/dev/null || true)
+            | jq -r '.[].metadata.container.tags[]' 2>/dev/null || true)
 
-          if [ -n "$EXISTING" ]; then
-            echo "Release $TAG already built, skipping"
+          HAS_GO=$(echo "$ALL_TAGS" | grep -cxF "$TAG" || true)
+          HAS_PYTHON=$(echo "$ALL_TAGS" | grep -cxF "${TAG}-python" || true)
+
+          if [ "$HAS_GO" -gt 0 ] && [ "$HAS_PYTHON" -gt 0 ]; then
+            echo "Release $TAG already built for both targets, skipping"
             echo "new_release=false" >> "$GITHUB_OUTPUT"
           else
-            echo "New release $TAG found, will build"
+            echo "New release $TAG found (go=$HAS_GO, python=$HAS_PYTHON), will build"
             echo "new_release=true" >> "$GITHUB_OUTPUT"
             echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
