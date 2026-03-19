@@ -50,7 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash curl jq git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY index.html server.py refresh.sh themes.json config.json ./
+COPY index.html *.py refresh.sh themes.json config.json ./
 RUN chmod +x refresh.sh
 
 RUN useradd -r -u 1001 dashboard && \
