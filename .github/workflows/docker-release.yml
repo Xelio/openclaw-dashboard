@@ -1,8 +1,8 @@
 # =============================================================================
 # Docker Release — Build and publish Docker images on new upstream releases
 #
-# Checks mudrii/openclaw-dashboard for new releases, builds a Go Docker
-# image, pushes to GHCR, and cleans up images older than 3 months.
+# Checks mudrii/openclaw-dashboard for new releases, builds Go and Python
+# Docker images, pushes to GHCR, and cleans up images older than 3 months.
 # =============================================================================
 
 name: Docker Release
@@ -69,10 +69,18 @@ jobs:
           fi
 
   build-and-push:
-    name: Build and push Docker image
+    name: Build and push Docker image (${{ matrix.target }})
     needs: check-upstream-release
     if: needs.check-upstream-release.outputs.new_release == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [go, python]
+        include:
+          - target: go
+            suffix: ""
+          - target: python
+            suffix: "-python"
     steps:
       - name: Checkout our repo (for Dockerfile)
         uses: actions/checkout@v4
@@ -105,15 +113,15 @@ jobs:
         with:
           images: ghcr.io/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ needs.check-upstream-release.outputs.release_tag }}
-            type=raw,value=${{ needs.check-upstream-release.outputs.version }}
-            type=raw,value=latest
+            type=raw,value=${{ needs.check-upstream-release.outputs.release_tag }}${{ matrix.suffix }}
+            type=raw,value=${{ needs.check-upstream-release.outputs.version }}${{ matrix.suffix }}
+            type=raw,value=latest${{ matrix.suffix }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: upstream
-          target: go
+          target: ${{ matrix.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
