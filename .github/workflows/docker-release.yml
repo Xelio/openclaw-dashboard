@@ -1,0 +1,152 @@
+# =============================================================================
+# Docker Release — Build and publish Docker images on new upstream releases
+#
+# Checks mudrii/openclaw-dashboard for new releases, builds Go and Python
+# Docker images, pushes to GHCR, and cleans up images older than 3 months.
+# =============================================================================
+
+name: Docker Release
+
+on:
+  schedule:
+    # Check for new upstream releases daily at midnight UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  UPSTREAM_REPO: mudrii/openclaw-dashboard
+  IMAGE_NAME: xelio/openclaw-dashboard
+
+jobs:
+  check-upstream-release:
+    name: Check for new upstream release
+    runs-on: ubuntu-latest
+    outputs:
+      new_release: ${{ steps.check.outputs.new_release }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check for new upstream release
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch latest release from upstream
+          RELEASE_JSON=$(curl -sfL \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null || true)
+
+          TAG=$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty')
+
+          if [ -z "$TAG" ]; then
+            echo "No release found upstream"
+            echo "new_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Strip leading 'v' for the version number
+          VERSION="${TAG#v}"
+
+          # Check if both Go and Python tags already exist in GHCR
+          ALL_TAGS=$(curl -sfL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/users/xelio/packages/container/openclaw-dashboard/versions" 2>/dev/null \
+            | jq -r '.[].metadata.container.tags[]' 2>/dev/null || true)
+
+          HAS_GO=$(echo "$ALL_TAGS" | grep -cxF "$TAG" || true)
+          HAS_PYTHON=$(echo "$ALL_TAGS" | grep -cxF "${TAG}-python" || true)
+
+          if [ "$HAS_GO" -gt 0 ] && [ "$HAS_PYTHON" -gt 0 ]; then
+            echo "Release $TAG already built for both targets, skipping"
+            echo "new_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New release $TAG found (go=$HAS_GO, python=$HAS_PYTHON), will build"
+            echo "new_release=true" >> "$GITHUB_OUTPUT"
+            echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-push:
+    name: Build and push Docker image (${{ matrix.target }})
+    needs: check-upstream-release
+    if: needs.check-upstream-release.outputs.new_release == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [go, python]
+        include:
+          - target: go
+            suffix: ""
+          - target: python
+            suffix: "-python"
+    steps:
+      - name: Checkout our repo (for Dockerfile)
+        uses: actions/checkout@v4
+        with:
+          path: self
+
+      - name: Checkout upstream release tag
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ needs.check-upstream-release.outputs.release_tag }}
+          path: upstream
+
+      - name: Use our Dockerfile with upstream source
+        run: cp self/Dockerfile upstream/Dockerfile
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ needs.check-upstream-release.outputs.release_tag }}${{ matrix.suffix }}
+            type=raw,value=${{ needs.check-upstream-release.outputs.version }}${{ matrix.suffix }}
+            type=raw,value=latest${{ matrix.suffix }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: upstream
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  cleanup:
+    name: Cleanup old container images
+    runs-on: ubuntu-latest
+    # Always run cleanup, even if no new release was found or build was skipped
+    if: always()
+    needs: build-and-push
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Delete images older than 3 months
+        uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          owner: xelio
+          package: openclaw-dashboard
+          older-than: 3 months
+          keep-n-tagged: 3
+          delete-untagged: true
