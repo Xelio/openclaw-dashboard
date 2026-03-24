@@ -1,8 +1,8 @@
 # =============================================================================
 # Docker Release — Build and publish Docker images on new upstream releases
 #
-# Checks mudrii/openclaw-dashboard for new releases, builds Go and Python
-# Docker images, pushes to GHCR, and cleans up images older than 3 months.
+# Checks mudrii/openclaw-dashboard for new releases, builds a Docker image,
+# pushes to GHCR, and cleans up images older than 3 months.
 # =============================================================================
 
 name: Docker Release
@@ -51,39 +51,30 @@ jobs:
           # Strip leading 'v' for the version number
           VERSION="${TAG#v}"
 
-          # Check if both Go and Python tags already exist in GHCR
+          # Check if this tag already exists in GHCR
           ALL_TAGS=$(curl -sfL \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             "https://api.github.com/users/xelio/packages/container/openclaw-dashboard/versions" 2>/dev/null \
             | jq -r '.[].metadata.container.tags[]' 2>/dev/null || true)
 
-          HAS_GO=$(echo "$ALL_TAGS" | grep -cxF "$TAG" || true)
-          HAS_PYTHON=$(echo "$ALL_TAGS" | grep -cxF "${TAG}-python" || true)
+          HAS_TAG=$(echo "$ALL_TAGS" | grep -cxF "$TAG" || true)
 
-          if [ "$HAS_GO" -gt 0 ] && [ "$HAS_PYTHON" -gt 0 ]; then
-            echo "Release $TAG already built for both targets, skipping"
+          if [ "$HAS_TAG" -gt 0 ]; then
+            echo "Release $TAG already built, skipping"
             echo "new_release=false" >> "$GITHUB_OUTPUT"
           else
-            echo "New release $TAG found (go=$HAS_GO, python=$HAS_PYTHON), will build"
+            echo "New release $TAG found, will build"
             echo "new_release=true" >> "$GITHUB_OUTPUT"
             echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           fi
 
   build-and-push:
-    name: Build and push Docker image (${{ matrix.target }})
+    name: Build and push Docker image
     needs: check-upstream-release
     if: needs.check-upstream-release.outputs.new_release == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [go, python]
-        include:
-          - target: go
-            suffix: ""
-          - target: python
-            suffix: "-python"
     steps:
       - name: Checkout our repo (for Dockerfile)
         uses: actions/checkout@v4
@@ -116,15 +107,14 @@ jobs:
         with:
           images: ghcr.io/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ needs.check-upstream-release.outputs.release_tag }}${{ matrix.suffix }}
-            type=raw,value=${{ needs.check-upstream-release.outputs.version }}${{ matrix.suffix }}
-            type=raw,value=latest${{ matrix.suffix }}
+            type=raw,value=${{ needs.check-upstream-release.outputs.release_tag }}
+            type=raw,value=${{ needs.check-upstream-release.outputs.version }}
+            type=raw,value=latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: upstream
-          target: ${{ matrix.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
